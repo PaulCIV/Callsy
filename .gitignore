@@ -62,3 +62,4 @@ __MACOSX/
 # ===========================
 *.log
 
+.warehousemapper-client-update/
