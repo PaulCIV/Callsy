@@ -25,7 +25,9 @@ export const env = {
   JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || "7d",
 
   TWILIO_ACCOUNT_SID: required("TWILIO_ACCOUNT_SID"),
-  TWILIO_AUTH_TOKEN: required("TWILIO_AUTH_TOKEN"),
+  TWILIO_AUTH_TOKEN: process.env.TWILIO_AUTH_TOKEN || "",
+  TWILIO_API_KEY_SID: process.env.TWILIO_API_KEY_SID || "",
+  TWILIO_API_KEY_SECRET: process.env.TWILIO_API_KEY_SECRET || "",
   TWILIO_PHONE_NUMBER: process.env.TWILIO_PHONE_NUMBER || "",
 
   // optional default sender override
@@ -37,7 +39,9 @@ export const env = {
   TWILIO_NUMBER_COUNTRY: process.env.TWILIO_NUMBER_COUNTRY || "US",
 
   // ⭐ AI
-  OPENAI_API_KEY: required("OPENAI_API_KEY")
+  // Optional: deterministic fallback messages keep local development working
+  // until an OpenAI key is configured.
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY || ""
 };
 
 function assertEnv() {
@@ -46,6 +50,16 @@ function assertEnv() {
     if (!env[key] || env[key].trim() === "") {
       throw new Error(`Missing required env var: ${key}`);
     }
+  }
+
+  const hasAuthToken = Boolean(env.TWILIO_AUTH_TOKEN.trim());
+  const hasApiKey = Boolean(
+    env.TWILIO_API_KEY_SID.trim() && env.TWILIO_API_KEY_SECRET.trim()
+  );
+  if (!hasAuthToken && !hasApiKey) {
+    throw new Error(
+      "Missing Twilio credentials: provide TWILIO_AUTH_TOKEN or both TWILIO_API_KEY_SID and TWILIO_API_KEY_SECRET"
+    );
   }
 }
 

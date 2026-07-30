@@ -63,6 +63,42 @@ const LeadSchema = new Schema<any>(
       sentAt: { type: Date },
       blocked: { type: Boolean, default: false },
       blockedReason: { type: String, default: "" }
+    },
+
+    urgency: {
+      isUrgent: { type: Boolean, default: false },
+      reason: { type: String, default: "" },
+      detectedAt: { type: Date },
+      escalationEventId: { type: Schema.Types.ObjectId, ref: "EscalationEvent" }
+    },
+
+    manualTakeover: {
+      active: { type: Boolean, default: false },
+      activatedAt: { type: Date }
+    },
+
+    smsConsent: {
+      status: {
+        type: String,
+        enum: ["unknown", "pending", "granted", "declined"],
+        default: "unknown"
+      },
+      source: {
+        type: String,
+        enum: ["", "voice_keypress", "voice_speech", "inbound_sms"],
+        default: ""
+      },
+      callSid: { type: String, trim: true, default: "" },
+      disclosureVersion: { type: String, trim: true, default: "" },
+      capturedAt: { type: Date }
+    },
+
+    appointment: {
+      status: { type: String, enum: ["none", "requested", "booked", "completed"], default: "none" },
+      requestedWindow: { type: String, trim: true, default: "" },
+      requestedAt: { type: Date },
+      bookedAt: { type: Date },
+      completedAt: { type: Date }
     }
   },
   { timestamps: true }

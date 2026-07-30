@@ -27,6 +27,21 @@ const CallEventSchema = new Schema(
     duration: { type: Number },
     answeredBy: { type: String, trim: true },
 
+    consent: {
+      status: {
+        type: String,
+        enum: ["pending", "granted", "declined", "no_response"],
+        default: "pending"
+      },
+      method: { type: String, enum: ["keypress", "speech", ""], default: "" },
+      response: { type: String, trim: true, default: "" },
+      disclosureVersion: { type: String, trim: true, default: "missed-call-sms-v1" },
+      requestedAt: { type: Date },
+      resolvedAt: { type: Date }
+    },
+
+    callbackRequired: { type: Boolean, default: false },
+
     raw: { type: Schema.Types.Mixed }
   } as any),
   { timestamps: true }

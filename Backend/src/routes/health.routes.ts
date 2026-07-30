@@ -7,10 +7,16 @@ import {
   updateBusiness,
   updateMyBusiness,
   provisionMyBusinessNumber,
+  assignMyBusinessTestNumber,
+  connectMyExistingTwilioNumber,
   releaseMyBusinessNumber,
   listLeads,
   listEvents,
-  listSmsEvents
+  listSmsEvents,
+  sendManualLeadMessage,
+  resumeLeadAutomation,
+  updateLeadAppointmentStatus,
+  listMyEscalations
 } from "../controllers/health.controller";
 import { requireAuth } from "../middleware/auth.middleware";
 
@@ -25,10 +31,16 @@ router.patch("/admin/businesses/me", requireAuth, updateMyBusiness);
 router.patch("/admin/businesses/:id", requireAuth, updateBusiness);
 
 router.post("/admin/businesses/me/provision-number", requireAuth, provisionMyBusinessNumber);
+router.post("/admin/businesses/me/assign-test-number", requireAuth, assignMyBusinessTestNumber);
+router.post("/admin/businesses/me/connect-existing-number", requireAuth, connectMyExistingTwilioNumber);
 router.post("/admin/businesses/me/release-number", requireAuth, releaseMyBusinessNumber);
 
 router.get("/admin/leads", requireAuth, listLeads);
 router.get("/admin/events", requireAuth, listEvents);
 router.get("/admin/sms-events", requireAuth, listSmsEvents);
+router.post("/admin/leads/:id/messages", requireAuth, sendManualLeadMessage);
+router.post("/admin/leads/:id/resume-automation", requireAuth, resumeLeadAutomation);
+router.patch("/admin/leads/:id/appointment", requireAuth, updateLeadAppointmentStatus);
+router.get("/admin/escalations", requireAuth, listMyEscalations);
 
 export default router;

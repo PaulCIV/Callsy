@@ -5,6 +5,8 @@ import Explanation from "./pages/Explanation";
 import Login from "./pages/Auth/Login";
 import Signup from "./pages/Auth/Signup";
 import ProtectedRoute from "./pages/Auth/ProtectedRoute";
+import PrivacyPolicy from "./pages/PrivacyPolicy";
+import Terms from "./pages/Terms";
 
 export default function App() {
   return (
@@ -13,6 +15,8 @@ export default function App() {
       <Route path="/explanation" element={<Explanation />} />
       <Route path="/login" element={<Login />} />
       <Route path="/signup" element={<Signup />} />
+      <Route path="/privacy" element={<PrivacyPolicy />} />
+      <Route path="/terms" element={<Terms />} />
       <Route
         path="/dashboard"
         element={

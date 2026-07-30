@@ -18,8 +18,7 @@ const SmsEventSchema = new Schema(
     messageSid: {
       type: String,
       required: true,
-      trim: true,
-      index: true
+      trim: true
     },
 
     direction: {

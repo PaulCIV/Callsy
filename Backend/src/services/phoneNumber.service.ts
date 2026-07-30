@@ -2,8 +2,9 @@ import { twilioClient } from "../config/twilio";
 import { env } from "../config/env";
 
 function ensureTwilioProvisioningConfig() {
-  if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN) {
-    throw new Error("Twilio is not configured. Missing account SID or auth token.");
+  const hasApiKey = Boolean(env.TWILIO_API_KEY_SID && env.TWILIO_API_KEY_SECRET);
+  if (!env.TWILIO_ACCOUNT_SID || (!env.TWILIO_AUTH_TOKEN && !hasApiKey)) {
+    throw new Error("Twilio is not configured. Add an auth token or API key credentials.");
   }
 
   if (!env.PUBLIC_WEBHOOK_BASE_URL) {
@@ -75,4 +76,33 @@ export async function releaseIncomingNumber(phoneSid: string) {
   }
 
   return { ok: true };
+}
+
+export async function connectExistingIncomingNumber(phoneNumber: string) {
+  ensureTwilioProvisioningConfig();
+  const normalized = String(phoneNumber || "").replace(/[^\d+]/g, "");
+  if (!/^\+[1-9]\d{7,14}$/.test(normalized)) {
+    throw new Error("Phone number must use E.164 format, for example +13158590469.");
+  }
+
+  const matches = await twilioClient.incomingPhoneNumbers.list({
+    phoneNumber: normalized,
+    limit: 2
+  });
+  const incomingNumber = matches.find((item: any) => item.phoneNumber === normalized);
+  if (!incomingNumber) {
+    const error = new Error("That number was not found in this Twilio account.") as Error & { status?: number };
+    error.status = 404;
+    throw error;
+  }
+
+  const baseUrl = normalizeBaseUrl(env.PUBLIC_WEBHOOK_BASE_URL);
+  const updated = await twilioClient.incomingPhoneNumbers(incomingNumber.sid).update({
+    voiceUrl: `${baseUrl}/twilio/voice`,
+    voiceMethod: "POST",
+    smsUrl: `${baseUrl}/twilio/sms-inbound`,
+    smsMethod: "POST"
+  });
+
+  return { sid: String(updated.sid), phoneNumber: String(updated.phoneNumber) };
 }

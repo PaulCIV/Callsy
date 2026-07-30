@@ -5,6 +5,8 @@ import RecentActivityPreview from "./RecentActivityPreview";
 import StatCard from "./StatCard";
 import WeeklyActivityCard from "./WeeklyActivityCard";
 import { MessageCircleReply, MessageSquareText, Phone } from "lucide-react";
+import PriorityStatusPanel from "./PriorityStatusPanel";
+import type { EscalationEvent } from "../../hooks/useDashboardData";
 
 type MessageTone = "friendly" | "professional" | "casual" | "direct";
 type FirstResponseStyle = "conversational" | "menu" | "appointment";
@@ -80,7 +82,7 @@ function FunnelCard({
   ];
 
   return (
-    <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+    <div className="h-full min-h-[430px] rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-sm font-medium text-zinc-900">Lead funnel</div>
@@ -88,8 +90,8 @@ function FunnelCard({
             How missed calls move through follow-up and reply.
           </div>
         </div>
-        <div className="rounded-full bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-700">
-          7 day view
+        <div className="shrink-0 whitespace-nowrap rounded-full bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-700">
+          Last 7 days
         </div>
       </div>
 
@@ -141,18 +143,24 @@ type OverviewTabProps = {
   style: FirstResponseStyle;
   previewMessage: string;
   classificationSummary: Record<LeadCategory, number>;
+  escalations: EscalationEvent[];
+  priorityEscalationEnabled: boolean;
 };
 
 export default function OverviewTab(props: OverviewTabProps) {
   return (
     <div className="mt-6 space-y-6">
+      <PriorityStatusPanel
+        events={props.escalations}
+        enabled={props.priorityEscalationEnabled}
+      />
       <div className="grid gap-4 md:grid-cols-3">
         {props.stats.map((stat) => (
           <StatCard key={stat.label} stat={stat} />
         ))}
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[1.1fr_1.4fr]">
+      <div className="grid items-stretch gap-4 xl:grid-cols-[1.05fr_1.35fr]">
         <FunnelCard
           missedCalls={props.missedCalls}
           followupsSent={props.followupsSent}
@@ -170,6 +178,7 @@ export default function OverviewTab(props: OverviewTabProps) {
           missedCalls={props.missedCalls}
           followupsSent={props.followupsSent}
           customerReplies={props.customerReplies}
+          replyRate={props.replyRate}
         />
       </div>
 

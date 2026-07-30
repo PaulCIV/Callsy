@@ -17,9 +17,42 @@ import {
 import { classifyLead } from "../services/aiClassifier.service";
 import { generateInitialFollowupMessage } from "../services/aiMessage.service";
 import { normalizePhone } from "../utils/normalizePhone";
+import {
+  acknowledgeOrAdvance,
+  detectPriorityMessage,
+  startPriorityEscalation,
+  updateEscalationCallStatus
+} from "../services/priorityEscalation.service";
 
 function twiml(inner: string) {
   return `<Response>${inner}</Response>`;
+}
+
+const MISSED_CALL_DISCLOSURE_VERSION = "missed-call-sms-v1";
+
+function escapeXml(value: unknown) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function voiceConsentActionUrl() {
+  const base = String(env.PUBLIC_WEBHOOK_BASE_URL || "").replace(/\/$/, "");
+  return `${base}/twilio/voice/consent`;
+}
+
+function consentPromptTwiml(businessName: string) {
+  const action = escapeXml(voiceConsentActionUrl());
+  const name = escapeXml(businessName || "the business");
+  return twiml(
+    `<Gather input="dtmf speech" numDigits="1" timeout="6" speechTimeout="auto" ` +
+      `hints="yes,yeah,yep,sure,okay" actionOnEmptyResult="true" method="POST" action="${action}">` +
+      `<Say>Sorry we missed your call. To receive a text from ${name} so we can help, press 1 or say yes.</Say>` +
+      `</Gather><Hangup/>`
+  );
 }
 
 function cleanLine(value: unknown): string {
@@ -51,6 +84,21 @@ function getMenuOptions(business: any): string[] {
 function containsAny(text: string, values: string[]) {
   const lowered = text.toLowerCase();
   return values.some((value) => lowered.includes(value));
+}
+
+function getHumanReplyDelayMs() {
+  const minSeconds = Math.max(3, Number(process.env.AI_REPLY_DELAY_MIN_SECONDS || 12));
+  const maxSeconds = Math.max(minSeconds, Number(process.env.AI_REPLY_DELAY_MAX_SECONDS || 35));
+  return Math.round((minSeconds + Math.random() * (maxSeconds - minSeconds)) * 1000);
+}
+
+function extractAppointmentWindow(message: string) {
+  const text = cleanLine(message);
+  const match = text.match(/\b(today|tomorrow|this week|next week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+(morning|afternoon|evening))?\b/i);
+  if (!match) return "";
+  const schedulingLanguage = /\b(work|works|prefer|bring|come in|available|schedule|appointment|morning|afternoon|evening)\b/i.test(text);
+  const explicitFutureWindow = /\b(today|tomorrow|this week|next week)\b/i.test(match[0]);
+  return schedulingLanguage || explicitFutureWindow ? match[0] : "";
 }
 
 function buildConversationReplyFallback(params: {
@@ -87,6 +135,10 @@ function buildConversationReplyFallback(params: {
   const mentionsUrgent = containsAny(message, ["urgent", "asap", "right away", "today"]);
 
   if (businessType.includes("auto")) {
+    if (containsAny(message, ["flashing", "blinking"]) && containsAny(message, ["light", "check engine"])) {
+      return `We're sorry you're dealing with this, especially after the recent repair. We recommend getting it back into the shop as soon as possible—what day works for you?`;
+    }
+
     if (mentionsBrake && asksBooking) {
       let reply = `Hi — this is ${businessName}. We can help with brake service. Were you looking for morning or afternoon tomorrow?`;
       if (bookingLink) {
@@ -103,7 +155,11 @@ function buildConversationReplyFallback(params: {
       return `Hi — this is ${businessName}. We can help with that. Is this something you need looked at today, or are you trying to schedule the next opening?`;
     }
 
-    return `Hi — this is ${businessName}. We can help with that. Are you looking to book service, get pricing, or ask a repair question?`;
+    if (params.classification?.category === "existing_customer") {
+      return `Hi — this is ${businessName}. We're sorry you're having another issue after the recent work. We recommend getting it back into the shop as soon as possible—what day works for you?`;
+    }
+
+    return `Hi — this is ${businessName}. We can help and would like to get you into the shop. What day this week works for you?`;
   }
 
   if (asksBooking) {
@@ -119,7 +175,7 @@ function buildConversationReplyFallback(params: {
   }
 
   if (params.classification?.category === "existing_customer") {
-    return `Hi — this is ${businessName}. Happy to help. What issue are you running into, and do you need a callback or an appointment?`;
+    return `Hi — this is ${businessName}. We want to get this taken care of. Would you prefer an appointment or a callback from the team?`;
   }
 
   return `Hi — this is ${businessName}. We can help with that. Are you looking to book, get pricing, or ask a quick question?`;
@@ -198,7 +254,19 @@ async function generateConversationReplyMessage(params: {
               "The customer has already texted back, so continue the conversation naturally.",
               "Do not say 'sorry we missed your call' or restart the conversation.",
               "Reply in 1-2 short sentences.",
-              "Ask one useful next-step question when appropriate.",
+              "Your primary goal is to recover revenue by moving a legitimate new or existing customer toward an appointment or human callback.",
+              "Do not diagnose, troubleshoot, or conduct an interview over text.",
+              "Acknowledge the issue briefly, then make a concrete next-step offer.",
+              "Ask at most one question, preferably a choice such as today or tomorrow, morning or afternoon, appointment or callback.",
+              "If the customer has already answered a diagnostic question, do not ask a narrower diagnostic question; move to service immediately.",
+              "Never claim an appointment is confirmed unless the input explicitly says the business confirmed it.",
+              "Never claim a day or time is available. Callsy does not know the shop calendar.",
+              "Never invent or output a placeholder booking link.",
+              "For urgent issues or a possible comeback after recent work, recommend getting it in as soon as possible and ask what day works.",
+              "For non-urgent work, ask what day this week works.",
+              "If the customer proposes a day or time window, say the team will contact them to confirm the exact time; do not ask another scheduling question.",
+              "If an existing customer reports a problem related to recent work, apologize once without admitting legal liability, take ownership of helping, and offer to get it back into the shop as soon as possible.",
+              "Do not tell the customer to pull over, stop driving, tow the vehicle, or attempt a repair unless the business explicitly configured that instruction.",
               "Mention the business name naturally if helpful.",
               "Do not mention AI or automation.",
               "No emojis.",
@@ -276,12 +344,19 @@ async function saveLeadFollowupBlocked(leadId: string, reason: string) {
   );
 }
 
-async function saveLeadReplyMetadata(leadId: string) {
+async function saveLeadReplyMetadata(leadId: string, message: string) {
   await Lead.updateOne(
     { _id: leadId },
     {
       $inc: { smsReplyCount: 1 },
-      $set: { lastSeenAt: new Date() }
+      $set: {
+        lastSeenAt: new Date(),
+        lastCustomerMessage: message,
+        lastMessageDirection: "inbound_sms",
+        "smsConsent.status": "granted",
+        "smsConsent.source": "inbound_sms",
+        "smsConsent.capturedAt": new Date()
+      }
     }
   );
 }
@@ -308,6 +383,86 @@ async function findOrCreateSmsLead(businessId: string, phone: string) {
     },
     { new: true, upsert: true }
   );
+}
+
+async function sendConsentedMissedCallFollowup(params: {
+  business: any;
+  lead: any;
+  customerPhone: string;
+}) {
+  const { business, lead, customerPhone: from } = params;
+  const cooldownMinutes = Number(business.cooldownMinutes ?? 120);
+  const lastFollowupAt = lead?.lastFollowupAt as Date | undefined;
+  const { aiEnabled, autoFollowupEnabled, useAiGeneratedMessage } =
+    getAiFlags(business);
+
+  if (!autoFollowupEnabled) {
+    await saveLeadFollowupBlocked(String(lead._id), "auto_followup_disabled");
+    return { sent: false, reason: "auto_followup_disabled" };
+  }
+
+  if (isCooldownActive(lastFollowupAt, cooldownMinutes)) {
+    return { sent: false, reason: "cooldown_active" };
+  }
+
+  let messageBody = "";
+  if (aiEnabled && useAiGeneratedMessage) {
+    const generated = await generateInitialFollowupMessage({
+      businessName: String(business.name ?? ""),
+      businessType: String(business.businessType ?? ""),
+      businessDescription: String(business.businessDescription ?? ""),
+      tone: business.tone ?? "friendly",
+      style: business.firstResponseStyle ?? "conversational",
+      bookingLink: String(business.bookingLink ?? ""),
+      menuOptions: getMenuOptions(business)
+    });
+    messageBody = generated.message;
+  } else {
+    const template = String(
+      business.followupTemplate ??
+        "Hi — this is {{business}}. Sorry we missed your call. How can we help?"
+    );
+    messageBody = buildFollowupMessage(template, {
+      caller: from,
+      business: String(business.name ?? ""),
+      link: String(business.bookingLink ?? "")
+    });
+    if (
+      business.firstResponseStyle === "menu" &&
+      Array.isArray(business.menuOptions) &&
+      business.menuOptions.length > 0
+    ) {
+      messageBody = appendMenuOptions(messageBody, business.menuOptions);
+    }
+  }
+
+  if (!/\bstop\b/i.test(messageBody)) {
+    messageBody = `${messageBody} Reply STOP to unsubscribe.`;
+  }
+
+  const smsResult: any = await sendSms(from, messageBody, business.twilioNumber);
+  const messageSid = String(smsResult?.sid ?? `DRY_RUN_${Date.now()}`);
+
+  await SmsEvent.findOneAndUpdate(
+    { messageSid },
+    {
+      $setOnInsert: {
+        businessId: business._id,
+        leadId: lead?._id,
+        messageSid,
+        direction: "outbound-followup",
+        from: normalizePhone(String(business.twilioNumber ?? "")),
+        to: from,
+        body: messageBody,
+        status: String(smsResult?.status ?? "sent"),
+        raw: smsResult ?? { dryRun: true }
+      }
+    },
+    { new: true, upsert: true }
+  );
+
+  await markFollowupSent(String(lead._id), messageBody);
+  return { sent: true, reason: "sent" };
 }
 
 export const voiceWebhook = async (req: Request, res: Response) => {
@@ -382,137 +537,155 @@ export const voiceWebhook = async (req: Request, res: Response) => {
     callSid
   });
 
-  const cooldownMinutes = Number(business.cooldownMinutes ?? 120);
-  const lastFollowupAt = lead?.lastFollowupAt as Date | undefined;
-  const { aiEnabled, classifyLeads, autoFollowupEnabled, useAiGeneratedMessage } =
-    getAiFlags(business);
-
-  let classification: any = null;
-
-  if (aiEnabled && classifyLeads) {
-    classification = await classifyLead({
-      businessName: String(business.name ?? ""),
-      businessType: String(business.businessType ?? ""),
-      businessDescription: String(business.businessDescription ?? ""),
-      callerPhone: from,
-      eventType: "missed_call",
-      latestMessage: "",
-      callCount: Number(lead?.callCount ?? 0),
-      smsReplyCount: Number(lead?.smsReplyCount ?? 0),
-      priorStatus: String(lead?.status ?? "")
-    });
-
-    console.log("VOICE AI CLASSIFICATION RESULT", classification);
-    await saveLeadClassification(String(lead._id), classification);
-  }
-
-  if (!autoFollowupEnabled) {
-    console.log("VOICE AUTO FOLLOWUP DISABLED", {
-      businessId: String(business._id),
-      leadId: String(lead._id)
-    });
-    await saveLeadFollowupBlocked(String(lead._id), "auto_followup_disabled");
-    res.type("text/xml");
-    return res.send(twiml("<Hangup/>"));
-  }
-
-  if (classification && !classification.shouldAutoFollowup) {
-    console.log("VOICE FOLLOWUP BLOCKED BY CLASSIFICATION", {
-      businessId: String(business._id),
-      leadId: String(lead._id),
-      classification
-    });
-    await saveLeadFollowupBlocked(
-      String(lead._id),
-      classification.reason || "classification_blocked"
-    );
-    res.type("text/xml");
-    return res.send(twiml("<Hangup/>"));
-  }
-
-  if (!isCooldownActive(lastFollowupAt, cooldownMinutes)) {
-    let messageBody = "";
-
-    if (aiEnabled && useAiGeneratedMessage) {
-      const generated = await generateInitialFollowupMessage({
-        businessName: String(business.name ?? ""),
-        businessType: String(business.businessType ?? ""),
-        businessDescription: String(business.businessDescription ?? ""),
-        tone: business.tone ?? "friendly",
-        style: business.firstResponseStyle ?? "conversational",
-        bookingLink: String(business.bookingLink ?? ""),
-        menuOptions: getMenuOptions(business)
-      });
-
-      messageBody = generated.message;
-      console.log("VOICE AI GENERATED MESSAGE", {
-        usedAi: generated.usedAi,
-        message: messageBody
-      });
-    } else {
-      const template = String(
-        business.followupTemplate ??
-          "Hi — this is {{business}}. Sorry we missed your call. How can we help?"
-      );
-
-      messageBody = buildFollowupMessage(template, {
-        caller: from,
-        business: String(business.name ?? ""),
-        link: String(business.bookingLink ?? "")
-      });
-
-      if (
-        business.firstResponseStyle === "menu" &&
-        Array.isArray(business.menuOptions) &&
-        business.menuOptions.length > 0
-      ) {
-        messageBody = appendMenuOptions(messageBody, business.menuOptions);
-      }
-    }
-
-    console.log("VOICE ABOUT TO SEND SMS", {
-      fromNumber: business.twilioNumber,
-      toCustomer: from,
-      body: messageBody
-    });
-
-    const smsResult: any = await sendSms(from, messageBody, business.twilioNumber);
-
-    console.log("VOICE SMS RESULT", smsResult);
-
-    const messageSid = String(smsResult?.sid ?? `DRY_RUN_${Date.now()}`);
-
-    await SmsEvent.findOneAndUpdate(
-      { messageSid },
+  // A missed call contains no intent. Keep the lead unclassified until the
+  // customer replies with actual message content.
+  if (Number(lead?.smsReplyCount || 0) === 0) {
+    await Lead.updateOne(
+      { _id: lead._id },
       {
-        $setOnInsert: {
-          businessId: business._id,
-          leadId: lead?._id,
-          messageSid,
-          direction: "outbound-followup",
-          from: normalizePhone(String(business.twilioNumber ?? "")),
-          to: from,
-          body: messageBody,
-          status: String(smsResult?.status ?? "sent"),
-          raw: smsResult ?? { dryRun: true }
-        }
-      },
-      { new: true, upsert: true }
+        $set: {
+          "classification.category": "unknown",
+          "classification.confidence": 0,
+          "classification.reason": "Awaiting customer reply",
+          "classification.shouldAutoFollowup": true
+        },
+        $unset: { "classification.classifiedAt": 1 }
+      }
     );
-
-    console.log("VOICE SMSEVENT WRITTEN");
-
-    await markFollowupSent(String(lead._id), messageBody);
-  } else {
-    console.log("COOLDOWN ACTIVE", {
-      businessId: String(business._id),
-      from,
-      cooldownMinutes
-    });
   }
+
+  const { autoFollowupEnabled } = getAiFlags(business);
+  if (!autoFollowupEnabled) {
+    await saveLeadFollowupBlocked(String(lead._id), "auto_followup_disabled");
+    await Lead.updateOne({ _id: lead._id }, { $set: { status: "callback_required" } });
+    await CallEvent.updateOne(
+      { businessId: business._id, callSid },
+      { $set: { callbackRequired: true } }
+    );
+    res.type("text/xml");
+    return res.send(twiml("<Say>Sorry we missed your call. The team will see your callback request.</Say><Hangup/>"));
+  }
+
+  const now = new Date();
+  await Promise.all([
+    CallEvent.updateOne(
+      { businessId: business._id, callSid },
+      {
+        $set: {
+          "consent.status": "pending",
+          "consent.disclosureVersion": MISSED_CALL_DISCLOSURE_VERSION,
+          "consent.requestedAt": now,
+          callbackRequired: false
+        }
+      }
+    ),
+    Lead.updateOne(
+      { _id: lead._id },
+      {
+        $set: {
+          status: "awaiting_consent",
+          "smsConsent.status": "pending",
+          "smsConsent.callSid": callSid,
+          "smsConsent.disclosureVersion": MISSED_CALL_DISCLOSURE_VERSION
+        }
+      }
+    )
+  ]);
 
   res.type("text/xml");
-  return res.send(twiml("<Hangup/>"));
+  return res.send(consentPromptTwiml(String(business.name ?? "")));
+};
+
+export const voiceConsentWebhook = async (req: Request, res: Response) => {
+  const callSid = String(req.body?.CallSid ?? "");
+  const digits = String(req.body?.Digits ?? "").trim();
+  const speech = cleanLine(req.body?.SpeechResult).toLowerCase();
+  const acceptedSpeech = /^(yes|yeah|yep|sure|okay|ok|please|yes please)\b/.test(speech);
+  const granted = digits === "1" || acceptedSpeech;
+  const method = digits ? "keypress" : speech ? "speech" : "";
+  const responseValue = digits || speech;
+
+  const event: any = await CallEvent.findOne({ callSid });
+  if (!event) {
+    res.type("text/xml");
+    return res.send(twiml("<Hangup/>"));
+  }
+
+  if (event?.consent?.status === "granted") {
+    res.type("text/xml");
+    return res.send(twiml("<Say>Thanks. Your text is on its way.</Say><Hangup/>"));
+  }
+
+  const resolvedAt = new Date();
+  const consentStatus = granted ? "granted" : responseValue ? "declined" : "no_response";
+  await CallEvent.updateOne(
+    { _id: event._id },
+    {
+      $set: {
+        "consent.status": consentStatus,
+        "consent.method": method,
+        "consent.response": responseValue,
+        "consent.disclosureVersion": MISSED_CALL_DISCLOSURE_VERSION,
+        "consent.resolvedAt": resolvedAt,
+        callbackRequired: !granted
+      }
+    }
+  );
+
+  const lead: any = event.leadId ? await Lead.findById(event.leadId) : null;
+  const business: any = await Business.findById(event.businessId);
+  if (!lead || !business) {
+    res.type("text/xml");
+    return res.send(twiml("<Hangup/>"));
+  }
+
+  if (!granted) {
+    await Lead.updateOne(
+      { _id: lead._id },
+      {
+        $set: {
+          status: "callback_required",
+          "smsConsent.status": responseValue ? "declined" : "unknown",
+          "smsConsent.source": "",
+          "followup.blocked": true,
+          "followup.blockedReason": responseValue ? "sms_consent_declined" : "sms_consent_not_received"
+        }
+      }
+    );
+    res.type("text/xml");
+    return res.send(
+      twiml("<Say>No problem. The team will see that you called and can return your call.</Say><Hangup/>")
+    );
+  }
+
+  await Lead.updateOne(
+    { _id: lead._id },
+    {
+      $set: {
+        status: "new",
+        "smsConsent.status": "granted",
+        "smsConsent.source": method === "keypress" ? "voice_keypress" : "voice_speech",
+        "smsConsent.callSid": callSid,
+        "smsConsent.disclosureVersion": MISSED_CALL_DISCLOSURE_VERSION,
+        "smsConsent.capturedAt": resolvedAt,
+        "followup.blocked": false,
+        "followup.blockedReason": ""
+      }
+    }
+  );
+
+  const result = await sendConsentedMissedCallFollowup({
+    business,
+    lead,
+    customerPhone: String(event.from)
+  });
+
+  res.type("text/xml");
+  return res.send(
+    result.sent
+      ? twiml("<Say>Thanks. Your text is on its way.</Say><Hangup/>")
+      : twiml("<Say>Thanks. The team has your request.</Say><Hangup/>")
+  );
 };
 
 export const smsInboundWebhook = async (req: Request, res: Response) => {
@@ -529,6 +702,14 @@ export const smsInboundWebhook = async (req: Request, res: Response) => {
   if (!from || !to) {
     console.log("SMS WEBHOOK MISSING REQUIRED FIELDS", { from, to, messageSid });
     return res.status(200).json({ ok: true });
+  }
+
+  if (messageSid) {
+    const duplicate = await SmsEvent.exists({ messageSid });
+    if (duplicate) {
+      console.log("SMS WEBHOOK DUPLICATE IGNORED", { messageSid });
+      return res.status(200).json({ ok: true, duplicate: true });
+    }
   }
 
   const business: any = await Business.findOne({
@@ -577,7 +758,77 @@ export const smsInboundWebhook = async (req: Request, res: Response) => {
     messageSid: inboundMessageSid
   });
 
-  await saveLeadReplyMetadata(String(lead._id));
+  await saveLeadReplyMetadata(String(lead._id), body);
+
+  const requestedWindow = extractAppointmentWindow(body);
+  if (requestedWindow) {
+    await Lead.updateOne(
+      { _id: lead._id },
+      { $set: {
+        "appointment.status": "requested",
+        "appointment.requestedWindow": requestedWindow,
+        "appointment.requestedAt": new Date(),
+        status: "appointment_requested"
+      } }
+    );
+  }
+
+  const recentCustomerMessages: any[] = await SmsEvent.find({
+    businessId: business._id,
+    leadId: lead._id,
+    direction: "inbound-reply"
+  }).sort({ createdAt: -1 }).limit(5).select("body").lean();
+  const priorityContext = recentCustomerMessages
+    .map((event) => String(event.body || ""))
+    .reverse()
+    .join(" ");
+  const priorityInput = /\b(flashing|blinking)\b/i.test(body)
+    ? priorityContext
+    : body;
+
+  const priority = detectPriorityMessage(
+    priorityInput,
+    business.priorityEscalation?.urgentKeywords
+  );
+  let priorityEvent: any = null;
+
+  if (
+    priority.isUrgent &&
+    business.priorityEscalation?.enabled &&
+    normalizePhone(String(business.priorityEscalation?.primaryPhone || ""))
+  ) {
+    priorityEvent = await startPriorityEscalation({
+      business,
+      lead,
+      customerPhone: from,
+      customerMessage: body,
+      reason: priority.reason
+    });
+
+    await Lead.updateOne(
+      { _id: lead._id },
+      {
+        $set: {
+          status: "priority",
+          "urgency.isUrgent": true,
+          "urgency.reason": priority.reason,
+          "urgency.detectedAt": new Date(),
+          "urgency.escalationEventId": priorityEvent._id
+        }
+      }
+    );
+
+    if (business.priorityEscalation?.customerConfirmationEnabled !== false) {
+      const flashingWarning = priority.reason.includes("flashing warning light");
+      const safetyLine = flashingWarning
+        ? " We're sorry you're dealing with this after the recent work. We'd like to get it back into the shop as soon as possible."
+        : priority.isSafetyRelated
+        ? " If anyone is in immediate danger, call 911 now."
+        : "";
+      const confirmation = `We flagged this as a priority and are contacting the on-call team now. We will confirm when a person acknowledges it.${safetyLine}`;
+      await sendSms(from, confirmation, business.twilioNumber);
+    }
+  }
 
   const {
     aiEnabled,
@@ -620,6 +871,11 @@ export const smsInboundWebhook = async (req: Request, res: Response) => {
         `\nReason: ${classification.reason}`;
     }
 
+
+    if (requestedWindow) {
+      forwardMsg += `\n\n📅 Appointment requested: ${requestedWindow}\nOpen Callsy to confirm a time or call the customer.`;
+    }
+
     const forwardResult: any = await sendSms(
       notifyTo,
       forwardMsg,
@@ -629,52 +885,64 @@ export const smsInboundWebhook = async (req: Request, res: Response) => {
     console.log("SMS FORWARD RESULT", forwardResult);
   }
 
-  const hasExistingFollowup = Boolean(lead?.lastFollowupAt || lead?.followup?.sent);
   const shouldAutoRespond =
     aiEnabled &&
     autoFollowupEnabled &&
     aiConversationRepliesEnabled &&
     useAiGeneratedMessage &&
-    hasExistingFollowup &&
-    (!classification || classification.shouldAutoFollowup !== false);
+    !lead?.manualTakeover?.active &&
+    (!classification || classification.shouldAutoFollowup !== false) &&
+    !priorityEvent;
 
   if (shouldAutoRespond) {
-    const generated = await generateConversationReplyMessage({
-      business,
-      customerMessage: body,
-      classification,
-      priorFollowupMessage: String(lead?.followup?.message ?? "")
-    });
+    const delayMs = getHumanReplyDelayMs();
+    console.log("SMS AI REPLY SCHEDULED", { leadId: String(lead._id), delayMs });
 
-    console.log("SMS AI GENERATED CONVERSATION REPLY", generated);
-
-    const smsResult: any = await sendSms(from, generated.message, business.twilioNumber);
-    const outboundMessageSid = String(smsResult?.sid ?? `DRY_RUN_${Date.now()}`);
-
-    await SmsEvent.findOneAndUpdate(
-      { messageSid: outboundMessageSid },
-      {
-        $setOnInsert: {
-          businessId: business._id,
-          leadId: lead?._id,
-          messageSid: outboundMessageSid,
-          direction: "outbound-followup",
-          from: normalizePhone(String(business.twilioNumber ?? "")),
-          to: from,
-          body: generated.message,
-          status: String(smsResult?.status ?? "sent"),
-          raw: smsResult ?? { dryRun: true }
+    setTimeout(async () => {
+      try {
+        const currentLead: any = await Lead.findById(lead._id).lean();
+        if (!currentLead || currentLead.manualTakeover?.active) {
+          console.log("SMS AI DELAYED REPLY CANCELLED: owner took over", { leadId: String(lead._id) });
+          return;
         }
-      },
-      { new: true, upsert: true }
-    );
 
-    console.log("SMS OUTBOUND FOLLOWUP EVENT WRITTEN", {
-      businessId: String(business._id),
-      messageSid: outboundMessageSid
-    });
+        const generated = requestedWindow
+          ? {
+              message: `Thanks—I've noted ${requestedWindow}. Someone from ${cleanLine(business.name) || "the team"} will contact you to confirm the exact time.`,
+              usedAi: false
+            }
+          : await generateConversationReplyMessage({
+              business,
+              customerMessage: body,
+              classification,
+              priorFollowupMessage: String(lead?.followup?.message ?? "")
+            });
 
-    await markFollowupSent(String(lead._id), generated.message);
+        console.log("SMS AI GENERATED MESSAGE AFTER DELAY", generated);
+        const smsResult: any = await sendSms(from, generated.message, business.twilioNumber);
+        const outboundMessageSid = String(smsResult?.sid ?? `DRY_RUN_${Date.now()}`);
+
+        await SmsEvent.findOneAndUpdate(
+          { messageSid: outboundMessageSid },
+          { $setOnInsert: {
+            businessId: business._id,
+            leadId: lead?._id,
+            messageSid: outboundMessageSid,
+            direction: "outbound-followup",
+            from: normalizePhone(String(business.twilioNumber ?? "")),
+            to: from,
+            body: generated.message,
+            status: String(smsResult?.status ?? "sent"),
+            raw: smsResult ?? { dryRun: true }
+          } },
+          { new: true, upsert: true }
+        );
+
+        await markFollowupSent(String(lead._id), generated.message);
+      } catch (error) {
+        console.error("SMS delayed AI reply failed", error);
+      }
+    }, delayMs);
   } else {
     console.log("SMS AUTO REPLY SKIPPED", {
       businessId: String(business._id),
@@ -682,12 +950,37 @@ export const smsInboundWebhook = async (req: Request, res: Response) => {
       autoFollowupEnabled,
       aiConversationRepliesEnabled,
       useAiGeneratedMessage,
-      hasExistingFollowup,
       classificationShouldAutoFollowup:
         classification ? classification.shouldAutoFollowup : undefined
     });
   }
 
+  return res.status(200).json({ ok: true });
+};
+
+export const escalationResponseWebhook = async (req: Request, res: Response) => {
+  const eventId = String(req.params?.eventId || "");
+  const role = String(req.query?.role || "primary");
+  const digit = String(req.body?.Digits || "");
+  const result: any = await acknowledgeOrAdvance(eventId, role, digit);
+
+  res.type("text/xml");
+  if (result?.action === "acknowledged") {
+    return res.send(twiml("<Say>Priority alert acknowledged. Open Callsy for the customer details.</Say><Hangup/>"));
+  }
+  if (result?.action === "backup") {
+    return res.send(twiml("<Say>The backup contact is being called now.</Say><Hangup/>"));
+  }
+  return res.send(twiml("<Say>No acknowledgment was recorded. The alert remains visible in Callsy.</Say><Hangup/>"));
+};
+
+export const escalationStatusWebhook = async (req: Request, res: Response) => {
+  await updateEscalationCallStatus(
+    String(req.params?.eventId || ""),
+    String(req.query?.role || "primary"),
+    String(req.body?.CallSid || ""),
+    String(req.body?.CallStatus || "")
+  );
   return res.status(200).json({ ok: true });
 };
 

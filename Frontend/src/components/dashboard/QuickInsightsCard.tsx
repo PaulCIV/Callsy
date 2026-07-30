@@ -33,19 +33,17 @@ function InsightRow({
     leads,
     missedCalls,
     followupsSent,
-    customerReplies
+    customerReplies,
+    replyRate
   }: {
     leads: number;
     missedCalls: number;
     followupsSent: number;
     customerReplies: number;
+    replyRate: string;
   }) {
     const awaitingReplyCount = Math.max(followupsSent - customerReplies, 0);
     const uncontactedLeads = Math.max(missedCalls - followupsSent, 0);
-    const replyRate = followupsSent
-      ? `${Math.round((customerReplies / followupsSent) * 100)}%`
-      : "0%";
-  
     return (
       <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
         <div className="text-sm font-medium text-zinc-900">Action items</div>

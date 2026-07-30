@@ -12,11 +12,16 @@ type SendSmsResult = {
 };
 
 function getTwilioClient() {
-  if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN) {
+  const hasApiKey = Boolean(env.TWILIO_API_KEY_SID && env.TWILIO_API_KEY_SECRET);
+  if (!env.TWILIO_ACCOUNT_SID || (!env.TWILIO_AUTH_TOKEN && !hasApiKey)) {
     return null;
   }
 
-  return twilio(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
+  return hasApiKey
+    ? twilio(env.TWILIO_API_KEY_SID, env.TWILIO_API_KEY_SECRET, {
+        accountSid: env.TWILIO_ACCOUNT_SID
+      })
+    : twilio(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
 }
 
 function getDefaultFromNumber(): string {

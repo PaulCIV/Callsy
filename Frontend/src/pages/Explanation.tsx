@@ -21,8 +21,8 @@ export default function Explanation() {
 
         {/* Intro */}
         <div className="mt-8 text-zinc-600 leading-relaxed">
-          Callsy automatically follows up when you miss a call. 
-          No complicated setup. No new phone system. Just instant recovery of lost leads.
+          Callsy captures missed calls and gives callers a fast way to request a text.
+          No replacement phone system—just a clear handoff into follow-up.
         </div>
 
         {/* Steps */}
@@ -42,8 +42,8 @@ export default function Explanation() {
 
           <Step
             icon={<Calendar size={20} />}
-            title="3. Callsy sends an instant text"
-            text="The caller receives a professional follow-up message immediately. You can include a booking link or custom message."
+            title="3. The caller requests a text"
+            text="Callsy asks them to press 1 or say yes. After consent is recorded, the professional follow-up is sent immediately."
           />
 
         </div>
@@ -58,7 +58,7 @@ export default function Explanation() {
               Most customers won’t call twice. If you miss the call, the lead is gone.
             </p>
             <p>
-              Callsy recovers that opportunity automatically — without adding friction to your workflow.
+              Callsy gives that caller a quick path into text follow-up while recording their choice.
             </p>
             <p>
               You stay focused on running your business while Callsy handles follow-up.

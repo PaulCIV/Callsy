@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   getMyBusiness,
   updateMyBusiness,
+  provisionMyBusinessNumber,
+  assignMyBusinessTestNumber,
   releaseMyBusinessNumber,
   Business
 } from "../pages/api/business";
@@ -29,6 +31,21 @@ export type DashboardBusiness = Business & {
     autoFollowupEnabled?: boolean;
     conversationRepliesEnabled?: boolean;
   };
+};
+
+export type EscalationEvent = {
+  _id: string;
+  businessId: string;
+  leadId: string;
+  customerPhone: string;
+  customerMessage: string;
+  reason: string;
+  summary: string;
+  status: "calling" | "acknowledged" | "unanswered" | "failed";
+  acknowledgedBy?: string;
+  acknowledgedAt?: string;
+  attempts?: Array<{ role: "primary" | "backup"; phone: string; status: string }>;
+  createdAt?: string;
 };
 
 export type Stat = {
@@ -61,6 +78,15 @@ export type Lead = {
   lastFollowupAt?: string;
   createdAt?: string;
   smsReplyCount?: number;
+  lastCustomerMessage?: string;
+  manualTakeover?: { active?: boolean; activatedAt?: string };
+  smsConsent?: {
+    status?: "unknown" | "pending" | "granted" | "declined";
+    source?: "" | "voice_keypress" | "voice_speech" | "inbound_sms";
+    capturedAt?: string;
+  };
+  urgency?: { isUrgent?: boolean; reason?: string };
+  appointment?: { status?: "none" | "requested" | "booked" | "completed"; requestedWindow?: string };
   updatedAt?: string;
   classification?: {
     category?: LeadCategory;
@@ -89,6 +115,13 @@ export type CallEvent = {
   callStatus: string;
   direction?: string;
   duration?: number;
+  consent?: {
+    status?: "pending" | "granted" | "declined" | "no_response";
+    method?: "keypress" | "speech" | "";
+    response?: string;
+    resolvedAt?: string;
+  };
+  callbackRequired?: boolean;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -389,14 +422,16 @@ function formatClassificationLabel(category?: LeadCategory) {
   if (category === "wrong_number") return "Wrong number";
   if (category === "spam") return "Spam";
   if (category === "lead") return "Likely new lead";
-  return "Unknown";
+  return "Awaiting reply";
 }
 
 export function useDashboardData() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [provisioning, setProvisioning] = useState(false);
   const [releasing, setReleasing] = useState(false);
+  const [sendingMessage, setSendingMessage] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [hasUnsavedSettingsChanges, setHasUnsavedSettingsChanges] = useState(false);
@@ -419,17 +454,24 @@ export function useDashboardData() {
   const [classifyLeads, setClassifyLeads] = useState(true);
   const [autoFollowupEnabled, setAutoFollowupEnabled] = useState(true);
   const [conversationRepliesEnabled, setConversationRepliesEnabled] = useState(true);
+  const [priorityEscalationEnabled, setPriorityEscalationEnabled] = useState(false);
+  const [priorityPrimaryPhone, setPriorityPrimaryPhone] = useState("");
+  const [priorityBackupPhone, setPriorityBackupPhone] = useState("");
+  const [priorityKeywordsText, setPriorityKeywordsText] = useState("");
+  const [priorityRingTimeout, setPriorityRingTimeout] = useState(20);
+  const [priorityCustomerConfirmation, setPriorityCustomerConfirmation] = useState(true);
 
   const [leads, setLeads] = useState<Lead[]>([]);
   const [callEvents, setCallEvents] = useState<CallEvent[]>([]);
   const [smsEvents, setSmsEvents] = useState<SmsEvent[]>([]);
+  const [escalations, setEscalations] = useState<EscalationEvent[]>([]);
 
   const hydrateBusinessForm = useCallback((b: DashboardBusiness) => {
     setBusinessName(b.name || "");
     setBusinessType(b.businessType || "");
     setBusinessDescription(b.businessDescription || "");
     setNotifyNumber(b.notifyToNumber || "");
-    setCooldownMinutes(Number(b.cooldownMinutes || 120));
+    setCooldownMinutes(Number(b.cooldownMinutes ?? 120));
     setFollowupTemplate(
       b.followupTemplate ||
         "Hi — this is {{business}}. Sorry we missed your call. How can we help?"
@@ -463,6 +505,18 @@ export function useDashboardData() {
         ? !!b.aiConfig.conversationRepliesEnabled
         : true
     );
+    setPriorityEscalationEnabled(Boolean(b.priorityEscalation?.enabled));
+    setPriorityPrimaryPhone(b.priorityEscalation?.primaryPhone || "");
+    setPriorityBackupPhone(b.priorityEscalation?.backupPhone || "");
+    setPriorityKeywordsText(
+      (b.priorityEscalation?.urgentKeywords || [
+        "tow", "towing", "stranded", "broke down", "roadside", "accident"
+      ]).join(", ")
+    );
+    setPriorityRingTimeout(Number(b.priorityEscalation?.ringTimeoutSeconds || 20));
+    setPriorityCustomerConfirmation(
+      b.priorityEscalation?.customerConfirmationEnabled !== false
+    );
   }, []);
 
   const loadDashboard = useCallback(
@@ -486,10 +540,11 @@ export function useDashboardData() {
           setHasUnsavedSettingsChanges(false);
         }
 
-        const [leadResult, eventResult, smsResult] = await Promise.all([
+        const [leadResult, eventResult, smsResult, escalationResult] = await Promise.all([
           apiFetch<{ ok: true; leads: Lead[] }>("/admin/leads", { method: "GET" }),
           apiFetch<{ ok: true; events: CallEvent[] }>("/admin/events", { method: "GET" }),
-          getSmsEventsSafe()
+          getSmsEventsSafe(),
+          apiFetch<{ ok: true; events: EscalationEvent[] }>("/admin/escalations", { method: "GET" })
         ]);
 
         const businessId = String(b._id);
@@ -501,6 +556,7 @@ export function useDashboardData() {
         setSmsEvents(
           smsResult.events.filter((event) => String(event.businessId) === businessId)
         );
+        setEscalations(escalationResult.events);
       } catch (err: any) {
         setError(err.message || "Failed to load dashboard");
       } finally {
@@ -643,6 +699,16 @@ export function useDashboardData() {
     [markSettingsDirty]
   );
 
+  const updatePriorityField = useCallback((field: string, value: string | number | boolean) => {
+    if (field === "enabled") setPriorityEscalationEnabled(Boolean(value));
+    if (field === "primaryPhone") setPriorityPrimaryPhone(String(value));
+    if (field === "backupPhone") setPriorityBackupPhone(String(value));
+    if (field === "keywords") setPriorityKeywordsText(String(value));
+    if (field === "timeout") setPriorityRingTimeout(Number(value) || 20);
+    if (field === "confirmation") setPriorityCustomerConfirmation(Boolean(value));
+    markSettingsDirty();
+  }, [markSettingsDirty]);
+
   const saveSettings = useCallback(async () => {
     try {
       setSaving(true);
@@ -665,6 +731,14 @@ export function useDashboardData() {
           classifyLeads,
           autoFollowupEnabled,
           conversationRepliesEnabled
+        },
+        priorityEscalation: {
+          enabled: priorityEscalationEnabled,
+          primaryPhone: priorityPrimaryPhone,
+          backupPhone: priorityBackupPhone,
+          urgentKeywords: priorityKeywordsText.split(",").map((item) => item.trim()).filter(Boolean),
+          ringTimeoutSeconds: priorityRingTimeout,
+          customerConfirmationEnabled: priorityCustomerConfirmation
         }
       };
 
@@ -695,6 +769,12 @@ export function useDashboardData() {
     hydrateBusinessForm,
     menuOptionsText,
     notifyNumber,
+    priorityBackupPhone,
+    priorityCustomerConfirmation,
+    priorityEscalationEnabled,
+    priorityKeywordsText,
+    priorityPrimaryPhone,
+    priorityRingTimeout,
     tone,
     useAiGeneratedMessage
   ]);
@@ -715,6 +795,70 @@ export function useDashboardData() {
       setError(err.message || "Failed to release number");
     } finally {
       setReleasing(false);
+    }
+  }, [hydrateBusinessForm]);
+
+  const provisionNumber = useCallback(async (areaCode?: number) => {
+    try {
+      setProvisioning(true);
+      setError("");
+      const result = await provisionMyBusinessNumber(areaCode);
+      const updatedBusiness = result.business as DashboardBusiness;
+      setBusiness(updatedBusiness);
+      hydrateBusinessForm(updatedBusiness);
+      setNotice(`Callsy number ${formatPhone(updatedBusiness.twilioNumber)} is ready`);
+    } catch (err: any) {
+      setError(err.message || "Failed to set up a Callsy number");
+    } finally {
+      setProvisioning(false);
+    }
+  }, [hydrateBusinessForm]);
+
+  const sendManualMessage = useCallback(async (leadId: string, body: string) => {
+    try {
+      setSendingMessage(true);
+      setError("");
+      await apiFetch(`/admin/leads/${leadId}/messages`, { method: "POST", json: { body } });
+      await loadDashboard(false, false);
+      setNotice("Reply sent — AI paused for this conversation");
+      return true;
+    } catch (err: any) {
+      setError(err.message || "Failed to send reply");
+      return false;
+    } finally { setSendingMessage(false); }
+  }, [loadDashboard]);
+
+  const resumeAutomation = useCallback(async (leadId: string) => {
+    try {
+      setError("");
+      await apiFetch(`/admin/leads/${leadId}/resume-automation`, { method: "POST" });
+      await loadDashboard(false, false);
+      setNotice("AI replies resumed for this conversation");
+    } catch (err: any) { setError(err.message || "Failed to resume AI"); }
+  }, [loadDashboard]);
+
+  const updateAppointmentStatus = useCallback(async (leadId: string, status: "booked" | "completed") => {
+    try {
+      setError("");
+      await apiFetch(`/admin/leads/${leadId}/appointment`, { method: "PATCH", json: { status } });
+      await loadDashboard(false, false);
+      setNotice(status === "booked" ? "Appointment marked booked" : "Job marked completed");
+    } catch (err: any) { setError(err.message || "Failed to update appointment"); }
+  }, [loadDashboard]);
+
+  const assignTestNumber = useCallback(async () => {
+    try {
+      setProvisioning(true);
+      setError("");
+      const result = await assignMyBusinessTestNumber();
+      const updatedBusiness = result.business as DashboardBusiness;
+      setBusiness(updatedBusiness);
+      hydrateBusinessForm(updatedBusiness);
+      setNotice(`Test number ${formatPhone(updatedBusiness.twilioNumber)} connected — no Twilio charge`);
+    } catch (err: any) {
+      setError(err.message || "Failed to connect a test number");
+    } finally {
+      setProvisioning(false);
     }
   }, [hydrateBusinessForm]);
 
@@ -799,13 +943,21 @@ export function useDashboardData() {
 
     const callFeed: FeedItem[] = callEvents.map((event) => {
       const linkedLead = event.leadId ? leadMap.get(String(event.leadId)) : undefined;
+      const consentStatus = event.consent?.status;
+      const consentMethod = event.consent?.method;
 
       return {
         id: `call-${event._id}`,
         time: timeAgo(event.createdAt),
-        title: "Missed call captured",
-        detail: `Customer ${formatPhone(event.from)} called your forwarded Callsy number.`,
-        secondary: `Call status: ${event.callStatus || "ringing"}`,
+        title: event.callbackRequired ? "Callback needed" : consentStatus === "granted" ? "Caller requested a text" : "Missed call captured",
+        detail: event.callbackRequired
+          ? `${formatPhone(event.from)} did not provide text consent. Return the call directly.`
+          : `Customer ${formatPhone(event.from)} called your forwarded Callsy number.`,
+        secondary: consentStatus === "granted"
+          ? `SMS consent recorded by ${consentMethod === "keypress" ? "keypress" : "spoken response"}.`
+          : consentStatus === "pending"
+            ? "Waiting for the caller to press 1 or say yes."
+            : `Call status: ${event.callStatus || "ringing"}`,
         tertiary:
           aiEnabled && linkedLead?.classification?.category
             ? `Classified as: ${formatClassificationLabel(linkedLead.classification.category)}`
@@ -934,7 +1086,9 @@ export function useDashboardData() {
     loading,
     refreshing,
     saving,
+    provisioning,
     releasing,
+    sendingMessage,
     error,
     notice,
     hasUnsavedSettingsChanges,
@@ -943,6 +1097,7 @@ export function useDashboardData() {
     leads,
     callEvents,
     smsEvents,
+    escalations,
 
     businessName,
     businessType,
@@ -959,6 +1114,12 @@ export function useDashboardData() {
     classifyLeads,
     autoFollowupEnabled,
     conversationRepliesEnabled,
+    priorityEscalationEnabled,
+    priorityPrimaryPhone,
+    priorityBackupPhone,
+    priorityKeywordsText,
+    priorityRingTimeout,
+    priorityCustomerConfirmation,
 
     overviewData,
     classificationSummary,
@@ -972,7 +1133,12 @@ export function useDashboardData() {
     loadDashboard,
     refreshDashboard,
     saveSettings,
+    provisionNumber,
+    assignTestNumber,
     releaseNumber,
+    sendManualMessage,
+    resumeAutomation,
+    updateAppointmentStatus,
 
     handleBusinessNameChange,
     handleBusinessTypeChange,
@@ -989,5 +1155,6 @@ export function useDashboardData() {
     handleClassifyLeadsChange,
     handleAutoFollowupEnabledChange,
     handleConversationRepliesEnabledChange
+    ,updatePriorityField
   };
 }

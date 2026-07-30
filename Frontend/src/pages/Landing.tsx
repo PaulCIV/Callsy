@@ -41,8 +41,8 @@ export default function Landing() {
             </h1>
 
             <p className="mt-4 text-base leading-relaxed text-zinc-600">
-              When you miss a call, Callsy instantly texts the caller so you don’t lose
-              the lead. Add a booking link so they can schedule immediately.
+              When you miss a call, Callsy asks whether the caller wants a text, then
+              follows up immediately after they press 1 or say yes.
             </p>
 
             <div className="mt-6 flex flex-wrap gap-3">
@@ -71,7 +71,7 @@ export default function Landing() {
             <div className="text-sm font-medium text-zinc-900">Example follow-up</div>
 
             <div className="mt-3 rounded-2xl bg-white p-4 shadow-sm">
-              <div className="text-xs text-zinc-500">Auto text</div>
+              <div className="text-xs text-zinc-500">Requested follow-up</div>
               <div className="mt-2 text-sm leading-relaxed text-zinc-800">
                 Sorry we missed your call — book here:{" "}
                 <span className="underline">https://your-booking-link.com</span>
@@ -100,14 +100,18 @@ export default function Landing() {
           />
           <Feature
             icon={<Calendar size={18} />}
-            title="Callsy follows up"
-            text="Instant text-back, optionally with a booking link."
+            title="Caller chooses text"
+            text="They press 1 or say yes, and Callsy sends the requested follow-up."
           />
         </div>
 
         {/* Footer */}
-        <div className="mt-16 border-t border-zinc-200 pt-8 text-xs text-zinc-500">
-          © {new Date().getFullYear()} Callsy
+        <div className="mt-16 flex flex-col gap-3 border-t border-zinc-200 pt-8 text-xs text-zinc-500 sm:flex-row sm:items-center sm:justify-between">
+          <span>© {new Date().getFullYear()} Callsy</span>
+          <div className="flex gap-4">
+            <Link to="/privacy" className="hover:text-zinc-900">Privacy Policy</Link>
+            <Link to="/terms" className="hover:text-zinc-900">Terms and Conditions</Link>
+          </div>
         </div>
       </div>
     </div>

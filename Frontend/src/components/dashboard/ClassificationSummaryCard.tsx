@@ -58,7 +58,7 @@ export default function ClassificationSummaryCard({
         <InsightRow label="Existing customers" value={String(summary.existing_customer)} tone="neutral" />
         <InsightRow label="Wrong numbers" value={String(summary.wrong_number)} tone="warning" />
         <InsightRow label="Spam / junk" value={String(summary.spam)} tone="warning" />
-        <InsightRow label="Unknown" value={String(summary.unknown)} tone="neutral" />
+        <InsightRow label="Awaiting reply" value={String(summary.unknown)} tone="neutral" />
       </div>
     </div>
   );

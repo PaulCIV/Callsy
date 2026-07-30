@@ -1,17 +1,22 @@
-import { AlertTriangle, Bot, Sparkles } from "lucide-react";
+import { AlertTriangle, Bot, Check, Phone, Sparkles } from "lucide-react";
+import { useState } from "react";
 import Field from "./common/Field";
 import Input from "./common/Input";
 import Select from "./common/Select";
 import Textarea from "./common/Textarea";
 import ToggleRow from "./common/ToggleRow";
+import PriorityEscalationCard from "./PriorityEscalationCard";
 
 type MessageTone = "friendly" | "professional" | "casual" | "direct";
 type FirstResponseStyle = "conversational" | "menu" | "appointment";
 
 type SettingsTabProps = {
   saving: boolean;
+  provisioning: boolean;
   releasing: boolean;
+  assignedNumber?: string;
   hasAssignedNumber: boolean;
+  hasUnsavedChanges: boolean;
   businessName: string;
   businessType: string;
   businessDescription: string;
@@ -28,7 +33,15 @@ type SettingsTabProps = {
   autoFollowupEnabled: boolean;
   useAiGeneratedMessage: boolean;
   conversationRepliesEnabled: boolean;
+  priorityEscalationEnabled: boolean;
+  priorityPrimaryPhone: string;
+  priorityBackupPhone: string;
+  priorityKeywordsText: string;
+  priorityRingTimeout: number;
+  priorityCustomerConfirmation: boolean;
   onSave: () => void;
+  onProvisionNumber: (areaCode?: number) => void;
+  onAssignTestNumber: () => void;
   onReleaseNumber: () => void;
   onBusinessNameChange: (v: string) => void;
   onBusinessTypeChange: (v: string) => void;
@@ -45,11 +58,65 @@ type SettingsTabProps = {
   onAutoFollowupEnabledChange: (checked: boolean) => void;
   onUseAiGeneratedMessageChange: (checked: boolean) => void;
   onConversationRepliesEnabledChange: (checked: boolean) => void;
+  onPriorityChange: (field: string, value: string | number | boolean) => void;
 };
 
 export default function SettingsTab(props: SettingsTabProps) {
+  const [areaCode, setAreaCode] = useState("");
+  const saveButton = (label = "Save") => (
+    <button type="button" onClick={props.onSave} disabled={props.saving || !props.hasUnsavedChanges} className="inline-flex shrink-0 items-center justify-center rounded-xl bg-zinc-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40">
+      {props.saving ? "Saving…" : label}
+    </button>
+  );
+
+  const handleProvision = () => {
+    const digits = areaCode.replace(/\D/g, "");
+    props.onProvisionNumber(digits.length === 3 ? Number(digits) : undefined);
+  };
+
   return (
     <div className="mt-6 space-y-6">
+      <section className="overflow-hidden rounded-2xl border border-indigo-200 bg-white shadow-sm">
+        <div className="flex flex-col gap-5 bg-gradient-to-r from-indigo-950 via-indigo-900 to-violet-900 p-6 text-white md:flex-row md:items-center md:justify-between">
+          <div className="flex items-start gap-3">
+            <div className="rounded-xl bg-white/10 p-2.5"><Phone size={20} /></div>
+            <div><h2 className="font-semibold">Your Callsy number</h2><p className="mt-1 max-w-xl text-sm leading-6 text-indigo-100">Customers call this number, and Callsy handles missed-call follow-up and text replies for this business.</p></div>
+          </div>
+          {props.hasAssignedNumber ? <div className="rounded-xl border border-white/20 bg-white/10 px-4 py-3 font-semibold tracking-wide">{props.assignedNumber}</div> : null}
+        </div>
+        {!props.hasAssignedNumber ? (
+          <div className="grid gap-5 p-6 md:grid-cols-[1fr_auto] md:items-end">
+            <div>
+              <label className="text-sm font-medium text-zinc-900" htmlFor="callsy-area-code">Preferred area code <span className="font-normal text-zinc-500">(optional)</span></label>
+              <input id="callsy-area-code" inputMode="numeric" maxLength={3} value={areaCode} onChange={(event) => setAreaCode(event.target.value.replace(/\D/g, "").slice(0, 3))} placeholder="313" className="mt-2 w-full rounded-xl border border-zinc-200 px-3 py-2.5 text-sm outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100 md:max-w-xs" />
+              <p className="mt-2 text-xs leading-5 text-zinc-500">A number is purchased from your connected Twilio account. If that area code is unavailable, Callsy selects another local number. Your public webhook URL must be running.</p>
+            </div>
+            <div className="flex flex-col gap-2">
+              <button type="button" onClick={handleProvision} disabled={props.provisioning || (areaCode.length > 0 && areaCode.length !== 3)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50">
+                <Phone size={16} />{props.provisioning ? "Setting up…" : "Buy Twilio number"}
+              </button>
+              <button type="button" onClick={props.onAssignTestNumber} disabled={props.provisioning} className="inline-flex items-center justify-center rounded-xl border border-indigo-200 bg-indigo-50 px-5 py-2.5 text-sm font-semibold text-indigo-800 hover:bg-indigo-100 disabled:opacity-50">
+                Use free test number
+              </button>
+              <span className="text-center text-[11px] text-zinc-500">Local development only · no charge</span>
+            </div>
+          </div>
+        ) : <div className="flex items-center gap-2 p-6 text-sm text-emerald-700"><Check size={17} /> Number assigned and ready for Twilio webhooks.</div>}
+      </section>
+
+      <PriorityEscalationCard
+        enabled={props.priorityEscalationEnabled}
+        primaryPhone={props.priorityPrimaryPhone}
+        backupPhone={props.priorityBackupPhone}
+        keywordsText={props.priorityKeywordsText}
+        ringTimeout={props.priorityRingTimeout}
+        customerConfirmation={props.priorityCustomerConfirmation}
+        saving={props.saving}
+        hasUnsavedChanges={props.hasUnsavedChanges}
+        onSave={props.onSave}
+        onChange={props.onPriorityChange}
+      />
+
       <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
@@ -59,14 +126,7 @@ export default function SettingsTab(props: SettingsTabProps) {
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={props.onSave}
-            disabled={props.saving}
-            className="inline-flex items-center justify-center rounded-xl bg-zinc-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-zinc-800 disabled:opacity-50"
-          >
-            {props.saving ? "Saving…" : "Save"}
-          </button>
+          {saveButton("Save business")}
         </div>
 
         <div className="mt-6 grid gap-5 md:grid-cols-2">
@@ -136,9 +196,9 @@ export default function SettingsTab(props: SettingsTabProps) {
       </div>
 
       <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
-        <div className="flex items-center gap-2">
-          <Sparkles size={16} className="text-zinc-900" />
-          <div className="text-sm font-medium text-zinc-900">AI behavior</div>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2"><Sparkles size={16} className="text-zinc-900" /><div className="text-sm font-medium text-zinc-900">AI behavior</div></div>
+          {saveButton("Save AI")}
         </div>
 
         <div className="mt-1 text-sm text-zinc-600">
@@ -163,7 +223,7 @@ export default function SettingsTab(props: SettingsTabProps) {
 
           <ToggleRow
             title="Auto follow-up enabled"
-            description="Let the system automatically send the first follow-up when allowed."
+            description="Send the first follow-up after the caller presses 1 or says yes."
             checked={props.autoFollowupEnabled}
             onChange={props.onAutoFollowupEnabledChange}
             disabled={!props.aiEnabled}
@@ -188,7 +248,7 @@ export default function SettingsTab(props: SettingsTabProps) {
       </div>
 
       <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
-        <div className="text-sm font-medium text-zinc-900">First response setup</div>
+        <div className="flex items-center justify-between gap-3"><div className="text-sm font-medium text-zinc-900">First response setup</div>{saveButton("Save message")}</div>
         <div className="mt-1 text-sm text-zinc-600">
           Choose how the first follow-up should feel and whether customers get quick-reply options.
         </div>
@@ -305,6 +365,11 @@ export default function SettingsTab(props: SettingsTabProps) {
           </div>
         </div>
       ) : null}
+
+      <div className="sticky bottom-4 z-20 flex items-center justify-between gap-4 rounded-2xl border border-zinc-200 bg-white/95 px-4 py-3 shadow-xl backdrop-blur">
+        <div className="text-sm text-zinc-600">{props.hasUnsavedChanges ? "You have unsaved changes" : "Everything is saved"}</div>
+        {saveButton("Save all changes")}
+      </div>
     </div>
   );
 }

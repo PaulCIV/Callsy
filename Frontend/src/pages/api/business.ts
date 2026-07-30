@@ -27,6 +27,14 @@ export type Business = {
     autoFollowupEnabled?: boolean;
     conversationRepliesEnabled?: boolean;
   };
+  priorityEscalation?: {
+    enabled?: boolean;
+    primaryPhone?: string;
+    backupPhone?: string;
+    urgentKeywords?: string[];
+    ringTimeoutSeconds?: number;
+    customerConfirmationEnabled?: boolean;
+  };
   createdAt?: string;
   updatedAt?: string;
 };
@@ -49,6 +57,13 @@ export async function provisionMyBusinessNumber(areaCode?: number) {
     method: "POST",
     json: areaCode ? { areaCode } : {}
   });
+}
+
+export async function assignMyBusinessTestNumber(phoneNumber = "+15005550006") {
+  return apiFetch<{ ok: true; testMode: true; business: Business }>(
+    "/admin/businesses/me/assign-test-number",
+    { method: "POST", json: { phoneNumber } }
+  );
 }
 
 export async function releaseMyBusinessNumber() {

@@ -4,19 +4,22 @@ import DashboardHeader from "../components/dashboard/DashboardHeader";
 import OverviewTab from "../components/dashboard/OverviewTab";
 import ActivityTab from "../components/dashboard/ActivityTab";
 import SettingsTab from "../components/dashboard/SettingsTab";
+import ConversationsTab from "../components/dashboard/ConversationsTab";
 import { logout } from "../pages/api/auth";
 import { useDashboardData } from "../hooks/useDashboardData";
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const [tab, setTab] = useState<"overview" | "activity" | "settings">("overview");
+  const [tab, setTab] = useState<"overview" | "conversations" | "activity" | "settings">("overview");
   const [loggingOut, setLoggingOut] = useState(false);
 
   const {
     loading,
     refreshing,
     saving,
+    provisioning,
     releasing,
+    sendingMessage,
     error,
     notice,
     hasUnsavedSettingsChanges,
@@ -40,6 +43,13 @@ export default function Dashboard() {
     classifyLeads,
     autoFollowupEnabled,
     conversationRepliesEnabled,
+    priorityEscalationEnabled,
+    priorityPrimaryPhone,
+    priorityBackupPhone,
+    priorityKeywordsText,
+    priorityRingTimeout,
+    priorityCustomerConfirmation,
+    escalations,
 
     overviewData,
     classificationSummary,
@@ -50,7 +60,12 @@ export default function Dashboard() {
     loadDashboard,
     refreshDashboard,
     saveSettings,
+    provisionNumber,
+    assignTestNumber,
     releaseNumber,
+    sendManualMessage,
+    resumeAutomation,
+    updateAppointmentStatus,
 
     handleBusinessNameChange,
     handleBusinessTypeChange,
@@ -67,6 +82,7 @@ export default function Dashboard() {
     handleClassifyLeadsChange,
     handleAutoFollowupEnabledChange,
     handleConversationRepliesEnabledChange
+    ,updatePriorityField
   } = useDashboardData();
 
   useEffect(() => {
@@ -145,10 +161,6 @@ export default function Dashboard() {
     );
   }
 
-  console.log("BUSINESS ID", business?._id);
-  console.log("SMS EVENTS FROM HOOK", smsEvents);
-  console.log("FEED FROM HOOK", feed);
-
   return (
     <div className="min-h-screen bg-zinc-50">
       <div className="mx-auto max-w-6xl px-6 py-10">
@@ -189,6 +201,10 @@ export default function Dashboard() {
             Activity
           </TabButton>
 
+          <TabButton active={tab === "conversations"} onClick={() => setTab("conversations")}>
+            Conversations
+          </TabButton>
+
           <TabButton active={tab === "settings"} onClick={() => setTab("settings")}>
             Settings
           </TabButton>
@@ -213,16 +229,23 @@ export default function Dashboard() {
             style={firstResponseStyle}
             previewMessage={previewMessage}
             classificationSummary={classificationSummary}
+            escalations={escalations}
+            priorityEscalationEnabled={priorityEscalationEnabled}
           />
         )}
 
         {tab === "activity" && <ActivityTab feed={feed} />}
 
+        {tab === "conversations" && <ConversationsTab leads={leads} events={smsEvents} sending={sendingMessage} onSend={sendManualMessage} onResume={resumeAutomation} onAppointmentStatus={updateAppointmentStatus} />}
+
         {tab === "settings" && (
           <SettingsTab
             saving={saving}
+            provisioning={provisioning}
             releasing={releasing}
+            assignedNumber={business?.twilioNumber}
             hasAssignedNumber={hasAssignedNumber}
+            hasUnsavedChanges={hasUnsavedSettingsChanges}
             businessName={businessName}
             businessType={businessType}
             businessDescription={businessDescription}
@@ -239,7 +262,15 @@ export default function Dashboard() {
             autoFollowupEnabled={autoFollowupEnabled}
             useAiGeneratedMessage={useAiGeneratedMessage}
             conversationRepliesEnabled={conversationRepliesEnabled}
+            priorityEscalationEnabled={priorityEscalationEnabled}
+            priorityPrimaryPhone={priorityPrimaryPhone}
+            priorityBackupPhone={priorityBackupPhone}
+            priorityKeywordsText={priorityKeywordsText}
+            priorityRingTimeout={priorityRingTimeout}
+            priorityCustomerConfirmation={priorityCustomerConfirmation}
             onSave={handleSave}
+            onProvisionNumber={provisionNumber}
+            onAssignTestNumber={assignTestNumber}
             onReleaseNumber={handleReleaseNumber}
             onBusinessNameChange={handleBusinessNameChange}
             onBusinessTypeChange={handleBusinessTypeChange}
@@ -256,6 +287,7 @@ export default function Dashboard() {
             onAutoFollowupEnabledChange={handleAutoFollowupEnabledChange}
             onUseAiGeneratedMessageChange={handleUseAiGeneratedMessageChange}
             onConversationRepliesEnabledChange={handleConversationRepliesEnabledChange}
+            onPriorityChange={updatePriorityField}
           />
         )}
       </div>

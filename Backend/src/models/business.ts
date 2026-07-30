@@ -84,6 +84,18 @@ const BusinessSchema = new Schema<any>(
       conversationRepliesEnabled: { type: Boolean, default: true }
     },
 
+    priorityEscalation: {
+      enabled: { type: Boolean, default: false },
+      primaryPhone: { type: String, trim: true, default: "" },
+      backupPhone: { type: String, trim: true, default: "" },
+      urgentKeywords: {
+        type: [String],
+        default: ["tow", "towing", "stranded", "broke down", "roadside", "accident"]
+      },
+      ringTimeoutSeconds: { type: Number, default: 20 },
+      customerConfirmationEnabled: { type: Boolean, default: true }
+    },
+
     isActive: { type: Boolean, default: true },
     cooldownMinutes: { type: Number, default: 120 }
   },
@@ -95,7 +107,7 @@ BusinessSchema.index(
   {
     unique: true,
     partialFilterExpression: {
-      twilioNumber: { $type: "string", $ne: "" }
+      twilioNumber: { $type: "string", $gt: "" }
     }
   }
 );
@@ -105,7 +117,7 @@ BusinessSchema.index(
   {
     unique: true,
     partialFilterExpression: {
-      twilioPhoneSid: { $type: "string", $ne: "" }
+      twilioPhoneSid: { $type: "string", $gt: "" }
     }
   }
 );

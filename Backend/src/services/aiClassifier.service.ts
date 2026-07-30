@@ -32,7 +32,7 @@ const DEFAULT_CLASSIFICATION: ClassificationResult = {
   category: "unknown",
   confidence: 0.25,
   reason: "No classification available.",
-  shouldAutoFollowup: false
+  shouldAutoFollowup: true
 };
 
 function getOpenAiApiKey(): string {
@@ -140,7 +140,7 @@ function buildSystemPrompt(): string {
     "- spam: robocall, telemarketer, scam, solicitation, or obvious junk",
     "- unknown: not enough evidence",
     "Guidelines:",
-    "- Prefer 'lead' for a normal missed call unless there is evidence against it.",
+    "- A missed call alone has no intent and should remain unknown until a customer message exists.",
     "- Use 'spam' only when there are clear spam or solicitation signals.",
     "- Use 'wrong_number' only when there is strong evidence.",
     "- shouldAutoFollowup should be false for spam and wrong_number.",
